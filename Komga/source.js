@@ -2023,291 +2023,6 @@ exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
 
 },{}],5:[function(require,module,exports){
 "use strict";
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.Madara = void 0;
-const _1 = require(".");
-const models_1 = require("../models");
-class Madara extends _1.Source {
-    constructor() {
-        super(...arguments);
-        /**
-         * The path that precedes a manga page not including the base URL.
-         * Eg. for https://www.webtoon.xyz/read/limit-breaker/ it would be 'read'.
-         * Used in all functions.
-         */
-        this.sourceTraversalPathName = 'manga';
-        /**
-         * By default, the homepage of a Madara is not its true homepage.
-         * Accessing the site directory and sorting by the latest title allows
-         * functions to step through the multiple pages easier, without a lot of custom
-         * logic for each source.
-         *
-         * This variable holds the latter half of the website path which is required to reach the
-         * directory page.
-         * Eg. 'webtoons' for https://www.webtoon.xyz/webtoons/?m_orderby=latest
-         */
-        this.homePage = 'manga';
-        /**
-         * Some Madara sources have a different selector which is required in order to parse
-         * out the popular manga. This defaults to the most common selector
-         * but can be overridden by other sources which need it.
-         */
-        this.popularMangaSelector = "div.page-item-detail";
-        /**
-         * Much like {@link popularMangaSelector} this will default to the most used CheerioJS
-         * selector to extract URLs from popular manga. This is available to be overridden.
-         */
-        this.popularMangaUrlSelector = "div.post-title a";
-        /**
-         * Different Madara sources might have a slightly different selector which is required to parse out
-         * each manga object while on a search result page. This is the selector
-         * which is looped over. This may be overridden if required.
-         */
-        this.searchMangaSelector = "div.c-tabs-item__content";
-    }
-    parseDate(dateString) {
-        // Primarily we see dates for the format: "1 day ago" or "16 Apr 2020"
-        let dateStringModified = dateString.replace('day', 'days').replace('month', 'months').replace('hour', 'hours');
-        return new Date(this.convertTime(dateStringModified));
-    }
-    getMangaDetails(mangaId) {
-        var _a;
-        return __awaiter(this, void 0, void 0, function* () {
-            const request = createRequestObject({
-                url: `${this.baseUrl}/${this.sourceTraversalPathName}/${mangaId}`,
-                method: 'GET'
-            });
-            let data = yield this.requestManager.schedule(request, 1);
-            let $ = this.cheerio.load(data.data);
-            let numericId = $('a.wp-manga-action-button').attr('data-post');
-            let title = $('div.post-title h1').first().text().replace(/NEW/, '').replace('\\n', '').trim();
-            let author = $('div.author-content').first().text().replace("\\n", '').trim();
-            let artist = $('div.artist-content').first().text().replace("\\n", '').trim();
-            let summary = $('p', $('div.description-summary')).text();
-            let image = (_a = $('div.summary_image img').first().attr('data-src')) !== null && _a !== void 0 ? _a : '';
-            let rating = $('span.total_votes').text().replace('Your Rating', '');
-            let isOngoing = $('div.summary-content').text().toLowerCase().trim() == "ongoing";
-            let genres = [];
-            for (let obj of $('div.genres-content a').toArray()) {
-                let genre = $(obj).text();
-                genres.push(createTag({ label: genre, id: genre }));
-            }
-            // If we cannot parse out the data-id for this title, we cannot complete subsequent requests
-            if (!numericId) {
-                throw (`Could not parse out the data-id for ${mangaId} - This method might need overridden in the implementing source`);
-            }
-            return createManga({
-                id: numericId,
-                titles: [title],
-                image: image,
-                author: author,
-                artist: artist,
-                desc: summary,
-                status: isOngoing ? models_1.MangaStatus.ONGOING : models_1.MangaStatus.COMPLETED,
-                rating: Number(rating)
-            });
-        });
-    }
-    getChapters(mangaId) {
-        var _a, _b;
-        return __awaiter(this, void 0, void 0, function* () {
-            const request = createRequestObject({
-                url: `${this.baseUrl}/wp-admin/admin-ajax.php`,
-                method: 'POST',
-                headers: {
-                    "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-                    "referer": this.baseUrl
-                },
-                data: `action=manga_get_chapters&manga=${mangaId}`
-            });
-            let data = yield this.requestManager.schedule(request, 1);
-            let $ = this.cheerio.load(data.data);
-            let chapters = [];
-            // Capture the manga title, as this differs from the ID which this function is fed
-            let realTitle = (_a = $('a', $('li.wp-manga-chapter  ').first()).attr('href')) === null || _a === void 0 ? void 0 : _a.replace(`${this.baseUrl}/${this.sourceTraversalPathName}/`, '').replace(/\/chapter.*/, '');
-            if (!realTitle) {
-                throw (`Failed to parse the human-readable title for ${mangaId}`);
-            }
-            // For each available chapter..
-            for (let obj of $('li.wp-manga-chapter  ').toArray()) {
-                let id = (_b = $('a', $(obj)).first().attr('href')) === null || _b === void 0 ? void 0 : _b.replace(`${this.baseUrl}/${this.sourceTraversalPathName}/${realTitle}/`, '').replace('/', '');
-                let chapNum = Number($('a', $(obj)).first().text().replace(/\D/g, ''));
-                let releaseDate = $('i', $(obj)).text();
-                if (!id) {
-                    throw (`Could not parse out ID when getting chapters for ${mangaId}`);
-                }
-                chapters.push({
-                    id: id,
-                    mangaId: realTitle,
-                    langCode: this.languageCode,
-                    chapNum: chapNum,
-                    time: this.parseDate(releaseDate)
-                });
-            }
-            return chapters;
-        });
-    }
-    getChapterDetails(mangaId, chapterId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            const request = createRequestObject({
-                url: `${this.baseUrl}/${this.sourceTraversalPathName}/${mangaId}/${chapterId}`,
-                method: 'GET',
-                cookies: [createCookie({ name: 'wpmanga-adault', value: "1", domain: this.baseUrl })]
-            });
-            let data = yield this.requestManager.schedule(request, 1);
-            let $ = this.cheerio.load(data.data);
-            let pages = [];
-            for (let obj of $('div.page-break').toArray()) {
-                let page = $('img', $(obj)).attr('data-src');
-                if (!page) {
-                    throw (`Could not parse page for ${mangaId}/${chapterId}`);
-                }
-                pages.push(page.replace(/[\t|\n]/g, ''));
-            }
-            return createChapterDetails({
-                id: chapterId,
-                mangaId: mangaId,
-                pages: pages,
-                longStrip: false
-            });
-        });
-    }
-    searchRequest(query, metadata) {
-        var _a, _b, _c;
-        return __awaiter(this, void 0, void 0, function* () {
-            // If we're supplied a page that we should be on, set our internal reference to that page. Otherwise, we start from page 0.
-            let page = (_a = metadata.page) !== null && _a !== void 0 ? _a : 0;
-            const request = createRequestObject({
-                url: `${this.baseUrl}/page/${page}?s=${query.title}&post_type=wp-manga`,
-                method: 'GET',
-                cookies: [createCookie({ name: 'wpmanga-adault', value: "1", domain: this.baseUrl })]
-            });
-            let data = yield this.requestManager.schedule(request, 1);
-            let $ = this.cheerio.load(data.data);
-            let results = [];
-            for (let obj of $(this.searchMangaSelector).toArray()) {
-                let id = (_b = $('a', $(obj)).attr('href')) === null || _b === void 0 ? void 0 : _b.replace(`${this.baseUrl}/${this.sourceTraversalPathName}/`, '').replace('/', '');
-                let title = createIconText({ text: (_c = $('a', $(obj)).attr('title')) !== null && _c !== void 0 ? _c : '' });
-                let image = $('img', $(obj)).attr('data-src');
-                if (!id || !title.text || !image) {
-                    // Something went wrong with our parsing, return a detailed error
-                    throw (`Failed to parse searchResult for ${this.baseUrl} using ${this.searchMangaSelector} as a loop selector`);
-                }
-                results.push(createMangaTile({
-                    id: id,
-                    title: title,
-                    image: image
-                }));
-            }
-            // Check to see whether we need to navigate to the next page or not
-            if ($('div.wp-pagenavi')) {
-                // There ARE multiple pages available, now we must check if we've reached the last or not
-                let pageContext = $('span.pages').text().match(/(\d)/g);
-                if (!pageContext || !pageContext[0] || !pageContext[1]) {
-                    throw (`Failed to parse whether this search has more pages or not. This source may need to have it's searchRequest method overridden`);
-                }
-                // Because we used the \d regex, we can safely cast each capture to a numeric value
-                if (Number(pageContext[1]) != Number(pageContext[2])) {
-                    metadata.page = page + 1;
-                }
-                else {
-                    metadata.page = undefined;
-                }
-            }
-            return createPagedResults({
-                results: results,
-                metadata: metadata.page !== undefined ? metadata : undefined
-            });
-        });
-    }
-    /**
-     * It's hard to capture a default logic for homepages. So for madara sources,
-     * instead we've provided a homesection reader for the base_url/webtoons/ endpoint.
-     * This supports having paged views in almost all cases.
-     * @param sectionCallback
-     */
-    getHomePageSections(sectionCallback) {
-        var _a;
-        return __awaiter(this, void 0, void 0, function* () {
-            let section = createHomeSection({ id: "latest", title: "Latest Titles" });
-            sectionCallback(section);
-            // Parse all of the available data
-            const request = createRequestObject({
-                url: `${this.baseUrl}/${this.homePage}/?m_orderby=latest`,
-                method: 'GET',
-                cookies: [createCookie({ name: 'wpmanga-adault', value: "1", domain: this.baseUrl })]
-            });
-            let data = yield this.requestManager.schedule(request, 1);
-            let $ = this.cheerio.load(data.data);
-            let items = [];
-            for (let obj of $('div.manga').toArray()) {
-                let image = $('img', $(obj)).attr('data-src');
-                let title = $('a', $('h3.h5', $(obj))).text();
-                let id = (_a = $('a', $('h3.h5', $(obj))).attr('href')) === null || _a === void 0 ? void 0 : _a.replace(`${this.baseUrl}/${this.sourceTraversalPathName}/`, '').replace('/', '');
-                if (!id || !title || !image) {
-                    throw (`Failed to parse homepage sections for ${this.baseUrl}/${this.sourceTraversalPathName}/`);
-                }
-                items.push(createMangaTile({
-                    id: id,
-                    title: createIconText({ text: title }),
-                    image: image
-                }));
-            }
-            section.items = items;
-            sectionCallback(section);
-        });
-    }
-    getViewMoreItems(homepageSectionId, metadata) {
-        var _a, _b;
-        return __awaiter(this, void 0, void 0, function* () {
-            // We only have one homepage section ID, so we don't need to worry about handling that any
-            let page = (_a = metadata.page) !== null && _a !== void 0 ? _a : 0; // Default to page 0
-            const request = createRequestObject({
-                url: `${this.baseUrl}/${this.homePage}/page/${page}/?m_orderby=latest`,
-                method: 'GET',
-                cookies: [createCookie({ name: 'wpmanga-adault', value: "1", domain: this.baseUrl })]
-            });
-            let data = yield this.requestManager.schedule(request, 1);
-            let $ = this.cheerio.load(data.data);
-            let items = [];
-            for (let obj of $('div.manga').toArray()) {
-                let image = $('img', $(obj)).attr('data-src');
-                let title = $('a', $('h3.h5', $(obj))).text();
-                let id = (_b = $('a', $('h3.h5', $(obj))).attr('href')) === null || _b === void 0 ? void 0 : _b.replace(`${this.baseUrl}/${this.sourceTraversalPathName}/`, '').replace('/', '');
-                if (!id || !title || !image) {
-                    throw (`Failed to parse homepage sections for ${this.baseUrl}/${this.sourceTraversalPathName}`);
-                }
-                items.push(createMangaTile({
-                    id: id,
-                    title: createIconText({ text: title }),
-                    image: image
-                }));
-            }
-            // Set up to go to the next page. If we are on the last page, remove the logic.
-            metadata.page = page + 1;
-            if (!$('a.last')) {
-                metadata = undefined;
-            }
-            return createPagedResults({
-                results: items,
-                metadata: metadata
-            });
-        });
-    }
-}
-exports.Madara = Madara;
-
-},{".":7,"../models":28}],6:[function(require,module,exports){
-"use strict";
 /**
  * Request objects hold information for a particular source (see sources for example)
  * This allows us to to use a generic api to make the calls against any source
@@ -2325,6 +2040,7 @@ class Source {
             requestsPerSecond: 2.5,
             requestTimeout: 5000
         });
+        this.stateManager = createSourceStateManager({});
         this.cheerio = cheerio;
     }
     /**
@@ -2337,8 +2053,23 @@ class Source {
      * NOTE: This does **NOT** influence any requests defined in the source implementation. This function will only influence requests
      * which happen behind the scenes and are not defined in your source.
      */
-    globalRequestHeaders() { return {}; }
+    globalRequestHeaders() { return Promise.resolve({}); }
     globalRequestCookies() { return []; }
+    getSourceMenu() { return Promise.resolve(null); }
+    /**
+     * A stateful source may require user input.
+     * By supplying this value to the Source, the app will render your form to the user
+     * in the application settings.
+     */
+    getSourceMenuItemForm(itemId) { return Promise.resolve(null); }
+    getSourceMenuItemLink(itemId) { return Promise.resolve(null); }
+    submitSourceMenuItemForm(id, form) { return Promise.resolve(); }
+    /**
+     * When the Advanced Search is rendered to the user, this skeleton defines what
+     * fields which will show up to the user, and returned back to the source
+     * when the request is made.
+     */
+    getAdvancedSearchForm() { return Promise.resolve(null); }
     /**
      * (OPTIONAL METHOD) Given a manga ID, return a URL which Safari can open in a browser to display.
      * @param mangaId
@@ -2424,10 +2155,22 @@ class Source {
         }
         return time;
     }
+    /**
+     * When a function requires a POST body, it always should be defined as a JsonObject
+     * and then passed through this function to ensure that it's encoded properly.
+     * @param obj
+     */
+    urlEncodeObject(obj) {
+        let ret = {};
+        for (const entry of Object.entries(obj)) {
+            ret[encodeURIComponent(entry[0])] = encodeURIComponent(entry[1]);
+        }
+        return ret;
+    }
 }
 exports.Source = Source;
 
-},{}],7:[function(require,module,exports){
+},{}],6:[function(require,module,exports){
 "use strict";
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -2441,9 +2184,8 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 __exportStar(require("./Source"), exports);
-__exportStar(require("./Madara"), exports);
 
-},{"./Madara":5,"./Source":6}],8:[function(require,module,exports){
+},{"./Source":5}],7:[function(require,module,exports){
 "use strict";
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -2460,17 +2202,17 @@ __exportStar(require("./base"), exports);
 __exportStar(require("./models"), exports);
 __exportStar(require("./APIWrapper"), exports);
 
-},{"./APIWrapper":2,"./base":7,"./models":28}],9:[function(require,module,exports){
+},{"./APIWrapper":2,"./base":6,"./models":30}],8:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 
-},{}],10:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],11:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],12:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],13:[function(require,module,exports){
+},{}],9:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],10:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],11:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],12:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LanguageCode = void 0;
@@ -2518,7 +2260,7 @@ var LanguageCode;
     LanguageCode["VIETNAMESE"] = "vn";
 })(LanguageCode = exports.LanguageCode || (exports.LanguageCode = {}));
 
-},{}],14:[function(require,module,exports){
+},{}],13:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MangaStatus = void 0;
@@ -2526,29 +2268,42 @@ var MangaStatus;
 (function (MangaStatus) {
     MangaStatus[MangaStatus["ONGOING"] = 1] = "ONGOING";
     MangaStatus[MangaStatus["COMPLETED"] = 0] = "COMPLETED";
+    MangaStatus[MangaStatus["UNKNOWN"] = 2] = "UNKNOWN";
 })(MangaStatus = exports.MangaStatus || (exports.MangaStatus = {}));
 
-},{}],15:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],16:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],17:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],18:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],19:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],20:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],21:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],22:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],23:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],24:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],25:[function(require,module,exports){
+},{}],14:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],15:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],16:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],17:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],18:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],19:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],20:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],21:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],22:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],23:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],24:[function(require,module,exports){
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.SourceMenuItemType = void 0;
+var SourceMenuItemType;
+(function (SourceMenuItemType) {
+    SourceMenuItemType["LINK"] = "link";
+    SourceMenuItemType["FORM"] = "form";
+})(SourceMenuItemType = exports.SourceMenuItemType || (exports.SourceMenuItemType = {}));
+
+},{}],25:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],26:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TagType = void 0;
@@ -2566,11 +2321,13 @@ var TagType;
     TagType["RED"] = "danger";
 })(TagType = exports.TagType || (exports.TagType = {}));
 
-},{}],26:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],27:[function(require,module,exports){
-arguments[4][9][0].apply(exports,arguments)
-},{"dup":9}],28:[function(require,module,exports){
+},{}],27:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],28:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],29:[function(require,module,exports){
+arguments[4][8][0].apply(exports,arguments)
+},{"dup":8}],30:[function(require,module,exports){
 "use strict";
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -2602,8 +2359,11 @@ __exportStar(require("./RequestHeaders"), exports);
 __exportStar(require("./SourceInfo"), exports);
 __exportStar(require("./TrackObject"), exports);
 __exportStar(require("./OAuth"), exports);
+__exportStar(require("./UserForm"), exports);
+__exportStar(require("./SourceStateManager"), exports);
+__exportStar(require("./SourceMenu"), exports);
 
-},{"./Chapter":9,"./ChapterDetails":10,"./Constants":11,"./HomeSection":12,"./Languages":13,"./Manga":14,"./MangaTile":15,"./MangaUpdate":16,"./OAuth":17,"./PagedResults":18,"./RequestHeaders":19,"./RequestManager":20,"./RequestObject":21,"./ResponseObject":22,"./SearchRequest":23,"./SourceInfo":24,"./SourceTag":25,"./TagSection":26,"./TrackObject":27}],29:[function(require,module,exports){
+},{"./Chapter":8,"./ChapterDetails":9,"./Constants":10,"./HomeSection":11,"./Languages":12,"./Manga":13,"./MangaTile":14,"./MangaUpdate":15,"./OAuth":16,"./PagedResults":17,"./RequestHeaders":18,"./RequestManager":19,"./RequestObject":20,"./ResponseObject":21,"./SearchRequest":22,"./SourceInfo":23,"./SourceMenu":24,"./SourceStateManager":25,"./SourceTag":26,"./TagSection":27,"./TrackObject":28,"./UserForm":29}],31:[function(require,module,exports){
 (function (Buffer){(function (){
 "use strict";
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
@@ -2616,15 +2376,22 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.Komga = exports.KomgaInfo = exports.parseMangaStatus = void 0;
+exports.Komga = exports.parseMangaStatus = exports.KomgaInfo = void 0;
 const paperback_extensions_common_1 = require("paperback-extensions-common");
-const KOMGA_DOMAIN = 'https://demo.komga.org';
-//const KOMGA_DOMAIN = 'http://192.168.0.23:8081'
-const KOMGA_USERNAME = "demo@komga.org";
-const KOMGA_PASSWORD = "komga-demo";
-const KOMGA_API_DOMAIN = KOMGA_DOMAIN + "/api/v1";
-const AUTHENTIFICATION = "Basic " + Buffer.from(KOMGA_USERNAME + ":" + KOMGA_PASSWORD, 'binary').toString('base64');
-const SUPPORTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+exports.KomgaInfo = {
+    version: "1.1.2",
+    name: "Komga",
+    icon: "icon.png",
+    author: "Lemon",
+    authorWebsite: "https://github.com/FramboisePi",
+    description: "Extension that pulls manga from Komga demo server",
+    //language: ,
+    hentaiSource: false,
+    websiteBaseURL: "https://komga.org"
+};
+const SUPPORTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"];
+// Number of items requested for paged requests
+const PAGE_SIZE = 40;
 exports.parseMangaStatus = (komgaStatus) => {
     switch (komgaStatus) {
         case "ENDED":
@@ -2638,32 +2405,37 @@ exports.parseMangaStatus = (komgaStatus) => {
     }
     return paperback_extensions_common_1.MangaStatus.ONGOING;
 };
-exports.KomgaInfo = {
-    version: "1.1.1",
-    name: "Komga",
-    icon: "icon.png",
-    author: "Lemon",
-    authorWebsite: "https://github.com/FramboisePi",
-    description: "Extension that pulls manga from Komga demo server",
-    //language: ,
-    hentaiSource: false,
-    websiteBaseURL: KOMGA_DOMAIN
-};
 class Komga extends paperback_extensions_common_1.Source {
+    getAuthorizationString() {
+        return __awaiter(this, void 0, void 0, function* () {
+            const username = yield this.stateManager.retrieve("serverUsername");
+            const password = yield this.stateManager.retrieve("serverPassword");
+            return "Basic " + Buffer.from(username + ":" + password, 'binary').toString('base64');
+        });
+    }
+    getKomgaAPI() {
+        return __awaiter(this, void 0, void 0, function* () {
+            const serverAddress = yield this.stateManager.retrieve("serverAddress");
+            return serverAddress + (serverAddress.slice(-1) === "/" ? "api/v1" : "/api/v1");
+        });
+    }
     globalRequestHeaders() {
-        return {
-            authorization: AUTHENTIFICATION
-        };
+        return __awaiter(this, void 0, void 0, function* () {
+            return {
+                authorization: yield this.getAuthorizationString()
+            };
+        });
     }
     getMangaDetails(mangaId) {
         return __awaiter(this, void 0, void 0, function* () {
             /*
               In Komga a manga is represented by a `serie`
              */
+            const komgaAPI = yield this.getKomgaAPI();
             let request = createRequestObject({
-                url: `${KOMGA_API_DOMAIN}/series/${mangaId}/`,
+                url: `${komgaAPI}/series/${mangaId}/`,
                 method: "GET",
-                headers: { authorization: AUTHENTIFICATION }
+                headers: { authorization: yield this.getAuthorizationString() }
             });
             const response = yield this.requestManager.schedule(request, 1);
             const result = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
@@ -2687,7 +2459,7 @@ class Komga extends paperback_extensions_common_1.Source {
             return createManga({
                 id: mangaId,
                 titles: [metadata.title],
-                image: `${KOMGA_API_DOMAIN}/series/${mangaId}/thumbnail`,
+                image: `${komgaAPI}/series/${mangaId}/thumbnail`,
                 rating: 5,
                 status: exports.parseMangaStatus(metadata.status),
                 langFlag: metadata.language,
@@ -2705,11 +2477,12 @@ class Komga extends paperback_extensions_common_1.Source {
             /*
               In Komga a chapter is a `book`
              */
+            const komgaAPI = yield this.getKomgaAPI();
             let request = createRequestObject({
-                url: `${KOMGA_API_DOMAIN}/series/${mangaId}/books`,
+                url: `${komgaAPI}/series/${mangaId}/books`,
                 param: "?unpaged=true&media_status=READY",
                 method: "GET",
-                headers: { authorization: AUTHENTIFICATION }
+                headers: { authorization: yield this.getAuthorizationString() }
             });
             const response = yield this.requestManager.schedule(request, 1);
             const result = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
@@ -2730,27 +2503,29 @@ class Komga extends paperback_extensions_common_1.Source {
     }
     getChapterDetails(mangaId, chapterId) {
         return __awaiter(this, void 0, void 0, function* () {
+            const komgaAPI = yield this.getKomgaAPI();
+            const authorizationString = yield this.getAuthorizationString();
             const request = createRequestObject({
-                url: `${KOMGA_API_DOMAIN}/books/${chapterId}/pages`,
+                url: `${komgaAPI}/books/${chapterId}/pages`,
                 method: "GET",
-                headers: { authorization: AUTHENTIFICATION }
+                headers: { authorization: authorizationString }
             });
             const data = yield this.requestManager.schedule(request, 1);
             const result = typeof data.data === "string" ? JSON.parse(data.data) : data.data;
             let pages = [];
             for (let page of result) {
-                if (!SUPPORTED_IMAGE_TYPES.includes(page.mediaType)) {
-                    pages.push(`${KOMGA_API_DOMAIN}/books/${chapterId}/pages/${page.number}?convert=png`);
+                if (SUPPORTED_IMAGE_TYPES.includes(page.mediaType)) {
+                    pages.push(`${komgaAPI}/books/${chapterId}/pages/${page.number}`);
                 }
                 else {
-                    pages.push(`${KOMGA_API_DOMAIN}/books/${chapterId}/pages/${page.number}`);
+                    pages.push(`${komgaAPI}/books/${chapterId}/pages/${page.number}?convert=png`);
                 }
             }
-            // Determine the preferred reading direction
+            // Determine the preferred reading direction which is only available in the serie metadata
             let serieRequest = createRequestObject({
-                url: `${KOMGA_API_DOMAIN}/series/${mangaId}/`,
+                url: `${komgaAPI}/series/${mangaId}/`,
                 method: "GET",
-                headers: { authorization: AUTHENTIFICATION }
+                headers: { authorization: authorizationString }
             });
             const serieResponse = yield this.requestManager.schedule(serieRequest, 1);
             const serieResult = typeof serieResponse.data === "string" ? JSON.parse(serieResponse.data) : serieResponse.data;
@@ -2767,8 +2542,11 @@ class Komga extends paperback_extensions_common_1.Source {
         });
     }
     searchRequest(searchQuery, metadata) {
+        var _a;
         return __awaiter(this, void 0, void 0, function* () {
-            let paramsList = ["unpaged=true"];
+            const komgaAPI = yield this.getKomgaAPI();
+            let page = (_a = metadata === null || metadata === void 0 ? void 0 : metadata.page) !== null && _a !== void 0 ? _a : 0;
+            let paramsList = [`page=${page}`, `size=${PAGE_SIZE}`];
             if (searchQuery.title !== undefined) {
                 paramsList.push("search=" + searchQuery.title.replace(" ", "%20"));
             }
@@ -2782,10 +2560,10 @@ class Komga extends paperback_extensions_common_1.Source {
                 paramsString = "?" + paramsList.join("&");
             }
             const request = createRequestObject({
-                url: `${KOMGA_API_DOMAIN}/series`,
+                url: `${komgaAPI}/series`,
                 method: "GET",
                 param: paramsString,
-                headers: { authorization: AUTHENTIFICATION }
+                headers: { authorization: yield this.getAuthorizationString() }
             });
             const data = yield this.requestManager.schedule(request, 1);
             let result = typeof data.data === "string" ? JSON.parse(data.data) : data.data;
@@ -2794,39 +2572,47 @@ class Komga extends paperback_extensions_common_1.Source {
                 tiles.push(createMangaTile({
                     id: serie.id,
                     title: createIconText({ text: serie.metadata.title }),
-                    image: `${KOMGA_API_DOMAIN}/series/${serie.id}/thumbnail`,
+                    image: `${komgaAPI}/series/${serie.id}/thumbnail`,
                     subtitleText: createIconText({ text: "id: " + serie.id }),
                 }));
             }
+            // If no series were returned we are on the last page
+            metadata = tiles.length === 0 ? undefined : { page: page + 1 };
             return createPagedResults({
-                results: tiles
+                results: tiles,
+                metadata
             });
         });
     }
     getHomePageSections(sectionCallback) {
         return __awaiter(this, void 0, void 0, function* () {
-            // Use ?paged=true ?
+            const komgaAPI = yield this.getKomgaAPI();
+            const authorizationString = yield this.getAuthorizationString();
             const sections = [
                 {
                     request: createRequestObject({
-                        url: `${KOMGA_API_DOMAIN}/series/new`,
+                        url: `${komgaAPI}/series/new`,
+                        param: "?page=0&size=20",
                         method: "GET",
-                        headers: { authorization: AUTHENTIFICATION }
+                        headers: { authorization: authorizationString }
                     }),
                     section: createHomeSection({
                         id: 'new',
                         title: 'Recently added series',
+                        view_more: true,
                     }),
                 },
                 {
                     request: createRequestObject({
-                        url: `${KOMGA_API_DOMAIN}/series/updated`,
+                        url: `${komgaAPI}/series/updated`,
+                        param: "?page=0&size=20",
                         method: "GET",
-                        headers: { authorization: AUTHENTIFICATION }
+                        headers: { authorization: authorizationString }
                     }),
                     section: createHomeSection({
                         id: 'updated',
                         title: 'Recently updated series',
+                        view_more: true,
                     }),
                 },
             ];
@@ -2842,7 +2628,7 @@ class Komga extends paperback_extensions_common_1.Source {
                         tiles.push(createMangaTile({
                             id: serie.id,
                             title: createIconText({ text: serie.metadata.title }),
-                            image: `${KOMGA_API_DOMAIN}/series/${serie.id}/thumbnail`,
+                            image: `${komgaAPI}/series/${serie.id}/thumbnail`,
                             subtitleText: createIconText({ text: "id: " + serie.id }),
                         }));
                     }
@@ -2854,32 +2640,135 @@ class Komga extends paperback_extensions_common_1.Source {
             yield Promise.all(promises);
         });
     }
-    filterUpdatedManga(mangaUpdatesFoundCallback, time, ids) {
+    getViewMoreItems(homepageSectionId, metadata) {
+        var _a;
         return __awaiter(this, void 0, void 0, function* () {
+            const komgaAPI = yield this.getKomgaAPI();
+            const authorizationString = yield this.getAuthorizationString();
+            let page = (_a = metadata === null || metadata === void 0 ? void 0 : metadata.page) !== null && _a !== void 0 ? _a : 0;
             const request = createRequestObject({
-                url: `${KOMGA_API_DOMAIN}/series/updated/`,
+                url: `${komgaAPI}/series/${homepageSectionId}`,
+                param: `?page=${page}&size=${PAGE_SIZE}`,
                 method: "GET",
-                headers: { authorization: "Basic ZGVtb0Brb21nYS5vcmc6a29tZ2EtZGVtbw==" }
+                headers: { authorization: authorizationString },
             });
             const data = yield this.requestManager.schedule(request, 1);
-            let result = typeof data.data === "string" ? JSON.parse(data.data) : data.data;
-            let foundIds = [];
+            const result = typeof data.data === "string" ? JSON.parse(data.data) : data.data;
+            let tiles = [];
             for (let serie of result.content) {
-                let serieUpdated = new Date(serie.metadata.lastModified);
-                if (serieUpdated >= time &&
-                    ids.includes(serie)) {
-                    foundIds.push(serie);
-                }
+                tiles.push(createMangaTile({
+                    id: serie.id,
+                    title: createIconText({ text: serie.metadata.title }),
+                    image: `${komgaAPI}/series/${serie.id}/thumbnail`,
+                    subtitleText: createIconText({ text: "id: " + serie.id }),
+                }));
             }
-            mangaUpdatesFoundCallback(createMangaUpdates({ ids: foundIds }));
+            // If no series were returned we are on the last page
+            metadata = tiles.length === 0 ? undefined : { page: page + 1 };
+            return createPagedResults({
+                results: tiles,
+                metadata: metadata
+            });
         });
     }
-    getMangaShareUrl(mangaId) {
-        return `${KOMGA_API_DOMAIN}/series/${mangaId}`;
+    filterUpdatedManga(mangaUpdatesFoundCallback, time, ids) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const komgaAPI = yield this.getKomgaAPI();
+            const authorizationString = yield this.getAuthorizationString();
+            // We make requests of PAGE_SIZE titles to `series/updated/` until we got every titles 
+            // or we got a title which `lastModified` metadata is older than `time`
+            let page = 0;
+            let foundIds = [];
+            let loadMore = true;
+            while (loadMore) {
+                const request = createRequestObject({
+                    url: `${komgaAPI}/series/updated/`,
+                    param: `?page=${page}&size=${PAGE_SIZE}`,
+                    method: "GET",
+                    headers: { authorization: authorizationString }
+                });
+                const data = yield this.requestManager.schedule(request, 1);
+                let result = typeof data.data === "string" ? JSON.parse(data.data) : data.data;
+                for (let serie of result.content) {
+                    let serieUpdated = new Date(serie.metadata.lastModified);
+                    if (serieUpdated >= time) {
+                        if (ids.includes(serie)) {
+                            foundIds.push(serie);
+                        }
+                    }
+                    else {
+                        loadMore = false;
+                        break;
+                    }
+                }
+                // If no series were returned we are on the last page
+                if (result.content.length === 0) {
+                    loadMore = false;
+                }
+                page = page + 1;
+                if (foundIds.length > 0) {
+                    mangaUpdatesFoundCallback(createMangaUpdates({
+                        ids: foundIds
+                    }));
+                }
+            }
+        });
+    }
+    /*
+    getMangaShareUrl(mangaId: string) {
+      return `${KOMGA_API_DOMAIN}/series/${mangaId}`
+    }
+    */
+    getSourceMenu() {
+        return __awaiter(this, void 0, void 0, function* () {
+            return Promise.resolve(createSourceMenu({
+                items: [
+                    createSourceMenuItem({
+                        id: "serverSettings",
+                        label: "Server Settings",
+                        type: paperback_extensions_common_1.SourceMenuItemType.FORM
+                    })
+                ]
+            }));
+        });
+    }
+    getSourceMenuItemForm(itemId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            let objects = [
+                createTextFieldObject({
+                    id: 'serverAddress',
+                    label: 'Server URL',
+                    placeholderText: 'http://127.0.0.1:8080',
+                    value: yield this.stateManager.retrieve('serverAddress')
+                }),
+                createTextFieldObject({
+                    id: 'serverUsername',
+                    label: 'Username',
+                    placeholderText: 'AnimeLover420',
+                    value: yield this.stateManager.retrieve('serverUsername')
+                }),
+                createTextFieldObject({
+                    id: 'serverPassword',
+                    label: 'Password',
+                    placeholderText: 'Some Super Secret Password',
+                    value: yield this.stateManager.retrieve('serverPassword')
+                })
+            ];
+            return createUserForm({ formElements: objects });
+        });
+    }
+    submitSourceMenuItemForm(itemId, form) {
+        return __awaiter(this, void 0, void 0, function* () {
+            var promises = [];
+            Object.keys(form).forEach(key => {
+                promises.push(this.stateManager.store(key, form[key]));
+            });
+            yield Promise.all(promises);
+        });
     }
 }
 exports.Komga = Komga;
 
 }).call(this)}).call(this,require("buffer").Buffer)
-},{"buffer":3,"paperback-extensions-common":8}]},{},[29])(29)
+},{"buffer":3,"paperback-extensions-common":7}]},{},[31])(31)
 });
